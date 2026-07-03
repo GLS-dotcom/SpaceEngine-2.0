@@ -18,6 +18,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Install dependencies (jq)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
       - name: Create/checkout branch
         run: |
           BRANCH="feature/phase0-init"
@@ -33,11 +38,16 @@ jobs:
         run: |
           set -e
           # criar diretórios
-          mkdir -p src/Launcher Engine/Core/include/Cosmos/Core Engine/Core/src \
-                   Engine/Logging/include/Cosmos/Logging Engine/Logging/src \
-                   Engine/Config/include/Cosmos/Config Engine/Config/src .github/workflows
+          mkdir -p src/Launcher \
+                   Engine/Core/include/Cosmos/Core \
+                   Engine/Core/src \
+                   Engine/Logging/include/Cosmos/Logging \
+                   Engine/Logging/src \
+                   Engine/Config/include/Cosmos/Config \
+                   Engine/Config/src \
+                   .github/workflows
 
-          cat > CMakeLists.txt <<'EOF'
+          cat > CMakeLists.txt <<'CMAKEOF'
 cmake_minimum_required(VERSION 3.16)
 project(SpaceEngine-2.0 VERSION 0.1.0 LANGUAGES CXX)
 
@@ -75,9 +85,9 @@ target_link_libraries(CosmosEngine PRIVATE EngineCore)
 target_include_directories(CosmosEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/Launcher)
 
 install(TARGETS CosmosEngine RUNTIME DESTINATION bin)
-EOF
+CMAKEOF
 
-          cat > src/Launcher/main.cpp <<'EOF'
+          cat > src/Launcher/main.cpp <<'CPP_EOF'
 #include "Cosmos/Core/Engine.h"
 #include <iostream>
 
@@ -92,9 +102,9 @@ int main(int argc, char* argv[]) {
     engine.Shutdown();
     return exitCode;
 }
-EOF
+CPP_EOF
 
-          cat > Engine/Core/include/Cosmos/Core/Engine.h <<'EOF'
+          cat > Engine/Core/include/Cosmos/Core/Engine.h <<'H_EOF'
 #pragma once
 
 #include <memory>
@@ -146,9 +156,9 @@ private:
 };
 
 } // namespace Cosmos
-EOF
+H_EOF
 
-          cat > Engine/Core/src/Engine.cpp <<'EOF'
+          cat > Engine/Core/src/Engine.cpp <<'CPP2_EOF'
 #include "Cosmos/Core/Engine.h"
 
 #include <chrono>
@@ -266,9 +276,9 @@ void Engine::Render() {
 }
 
 } // namespace Cosmos
-EOF
+CPP2_EOF
 
-          cat > Engine/Core/include/Cosmos/Core/Timer.h <<'EOF'
+          cat > Engine/Core/include/Cosmos/Core/Timer.h <<'T_EOF'
 #pragma once
 
 #include <chrono>
@@ -290,9 +300,9 @@ private:
 };
 
 } // namespace Cosmos
-EOF
+T_EOF
 
-          cat > Engine/Core/src/Timer.cpp <<'EOF'
+          cat > Engine/Core/src/Timer.cpp <<'T2_EOF'
 #include "Cosmos/Core/Timer.h"
 
 using namespace Cosmos;
@@ -312,9 +322,9 @@ void Timer::Tick() {
     m_TotalTime += m_DeltaTime;
     m_Last = now;
 }
-EOF
+T2_EOF
 
-          cat > Engine/Core/include/Cosmos/Core/Application.h <<'EOF'
+          cat > Engine/Core/include/Cosmos/Core/Application.h <<'A_EOF'
 #pragma once
 
 namespace Cosmos {
@@ -339,9 +349,9 @@ private:
 };
 
 } // namespace Cosmos
-EOF
+A_EOF
 
-          cat > Engine/Core/src/Application.cpp <<'EOF'
+          cat > Engine/Core/src/Application.cpp <<'A2_EOF'
 #include "Cosmos/Core/Application.h"
 #include <iostream>
 
@@ -371,9 +381,9 @@ void Application::Render() {
 void Application::Shutdown() {
     std::cout << "Application shutdown\n";
 }
-EOF
+A2_EOF
 
-          cat > Engine/Logging/include/Cosmos/Logging/Logger.h <<'EOF'
+          cat > Engine/Logging/include/Cosmos/Logging/Logger.h <<'L_H'
 #pragma once
 
 #include <string>
@@ -400,9 +410,9 @@ private:
 
 } // namespace Logging
 } // namespace Cosmos
-EOF
+L_H
 
-          cat > Engine/Logging/src/Logger.cpp <<'EOF'
+          cat > Engine/Logging/src/Logger.cpp <<'L_CPP'
 #include "Cosmos/Logging/Logger.h"
 #include <iostream>
 #include <filesystem>
@@ -454,9 +464,9 @@ void Logger::Debug(const std::string& msg) {
     std::cout << line << std::endl;
     if (m_File.is_open()) m_File << line << std::endl;
 }
-EOF
+L_CPP
 
-          cat > Engine/Config/include/Cosmos/Config/ConfigManager.h <<'EOF'
+          cat > Engine/Config/include/Cosmos/Config/ConfigManager.h <<'C_H'
 #pragma once
 
 #include <string>
@@ -478,9 +488,9 @@ private:
 
 } // namespace Config
 } // namespace Cosmos
-EOF
+C_H
 
-          cat > Engine/Config/src/ConfigManager.cpp <<'EOF'
+          cat > Engine/Config/src/ConfigManager.cpp <<'C_CPP'
 #include "Cosmos/Config/ConfigManager.h"
 #include <fstream>
 #include <iostream>
@@ -503,9 +513,9 @@ bool ConfigManager::Initialize(const std::string& path) {
 
 void ConfigManager::Shutdown() {
 }
-EOF
+C_CPP
 
-          cat > README.md <<'EOF'
+          cat > README.md <<'R_EOF'
 # SpaceEngine-2.0 (minimal)
 
 This repository is an initial minimal skeleton for the Cosmos / SpaceEngine-2.0 project.
