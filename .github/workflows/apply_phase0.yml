@@ -38,11 +38,16 @@ jobs:
         run: |
           set -e
           # criar diretórios
-          mkdir -p src/Launcher Engine/Core/include/Cosmos/Core Engine/Core/src \
-                   Engine/Logging/include/Cosmos/Logging Engine/Logging/src \
-                   Engine/Config/include/Cosmos/Config Engine/Config/src .github/workflows
+          mkdir -p src/Launcher \
+                   Engine/Core/include/Cosmos/Core \
+                   Engine/Core/src \
+                   Engine/Logging/include/Cosmos/Logging \
+                   Engine/Logging/src \
+                   Engine/Config/include/Cosmos/Config \
+                   Engine/Config/src \
+                   .github/workflows
 
-          cat > CMakeLists.txt <<'EOF'
+          cat > CMakeLists.txt <<'CMAKEOF'
 cmake_minimum_required(VERSION 3.16)
 project(SpaceEngine-2.0 VERSION 0.1.0 LANGUAGES CXX)
 
@@ -80,9 +85,9 @@ target_link_libraries(CosmosEngine PRIVATE EngineCore)
 target_include_directories(CosmosEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/Launcher)
 
 install(TARGETS CosmosEngine RUNTIME DESTINATION bin)
-EOF
+CMAKEOF
 
-          cat > src/Launcher/main.cpp <<'EOF'
+          cat > src/Launcher/main.cpp <<'CPP_EOF'
 #include "Cosmos/Core/Engine.h"
 #include <iostream>
 
@@ -97,9 +102,9 @@ int main(int argc, char* argv[]) {
     engine.Shutdown();
     return exitCode;
 }
-EOF
+CPP_EOF
 
-          cat > Engine/Core/include/Cosmos/Core/Engine.h <<'EOF'
+          cat > Engine/Core/include/Cosmos/Core/Engine.h <<'H_EOF'
 #pragma once
 
 #include <memory>
@@ -151,42 +156,384 @@ private:
 };
 
 } // namespace Cosmos
-EOF
+H_EOF
 
-          # ... (os demais arquivos seguem o mesmo padrão; cortei aqui por brevidade)
-          # Se quiser eu forneço o arquivo completo novamente ou o coloque todo no workflow.
+          cat > Engine/Core/src/Engine.cpp <<'CPP2_EOF'
+#include "Cosmos/Core/Engine.h"
 
-      - name: Commit & push branch
-        env:
-          GIT_COMMITTER_NAME: "github-actions[bot]"
-          GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
-        run: |
-          git config user.name "${GIT_COMMITTER_NAME}"
-          git config user.email "${GIT_COMMITTER_EMAIL}"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Phase 0 initial skeleton: Engine core, Logger, ConfigManager, CMake, CI, docs"
-            git push --set-upstream origin HEAD
-          fi
+#include <chrono>
+#include <thread>
+#include <filesystem>
 
-      - name: Create pull request (if not exists)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          REPO="${{ github.repository }}"
-          HEAD_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-          BASE="main"
-          TITLE="Phase 0 — Initial skeleton: Engine core, Logger, ConfigManager, CMake, CI"
-          BODY="MVP Phase 0: adiciona esqueleto inicial (Engine core, Logger, ConfigManager, CMake, Actions)."
-          EXISTING=$(curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO/pulls?head=${REPO%/*}:$HEAD_BRANCH&state=open")
-          if [ "$(echo "$EXISTING" | jq 'length')" -gt 0 ]; then
-            echo "PR already exists for $HEAD_BRANCH"
-          else
-            echo "Creating PR..."
-            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/$REPO/pulls" \
-              -d "{\"title\":\"$TITLE\",\"head\":\"$HEAD_BRANCH\",\"base\":\"$BASE\",\"body\":\"$BODY\"}"
-          fi
+#include "Cosmos/Core/Application.h"
+#include "Cosmos/Core/Timer.h"
+#include "Cosmos/Logging/Logger.h"
+#include "Cosmos/Config/ConfigManager.h"
+
+namespace Cosmos {
+
+Engine* Engine::s_Instance = nullptr;
+
+Engine::Engine(int argc, char* argv[])
+    : m_Argc(argc)
+    , m_Application(std::make_unique<Application>())
+    , m_Timer(std::make_unique<Timer>())
+    , m_Logger(std::make_unique<Logger>())
+    , m_ConfigManager(std::make_unique<ConfigManager>())
+{
+    s_Instance = this;
+    for (int i = 0; i < argc; ++i) m_Argv.emplace_back(argv[i]);
+}
+
+Engine::~Engine() {
+    if (m_Initialized) Shutdown();
+    s_Instance = nullptr;
+}
+
+bool Engine::Initialize() {
+    if (m_Initialized) return true;
+
+    try {
+        std::filesystem::create_directories("logs");
+    } catch(...) {}
+
+    m_Logger->Info("SpaceEngine-2.0 initializing...");
+
+    if (!m_ConfigManager->Initialize("config/engine.json")) {
+        m_Logger->Error("ConfigManager initialization failed (continuing with defaults)");
+    }
+
+    m_Timer->Start();
+
+    if (!m_Application->Initialize()) {
+        m_Logger->Error("Application initialization failed");
+        return false;
+    }
+
+    m_Initialized = true;
+    m_Logger->Info("Initialization complete");
+    return true;
+}
+
+int Engine::Run() {
+    if (!m_Initialized) {
+        m_Logger->Error("Engine not initialized");
+        return 1;
+    }
+
+    m_Running = true;
+    m_Logger->Info("Entering main loop");
+
+    while (m_Running) {
+        UpdateTiming();
+        m_FrameCount++;
+
+        ProcessEvents();
+        Update(m_DeltaTime);
+        Render();
+
+        if (m_Application->ShouldClose()) m_Running = false;
+
+        m_FPSTimer += m_DeltaTime;
+        if (m_FPSTimer >= 1.0f) {
+            m_FPS = m_FrameCount;
+            m_FrameCount = 0;
+            m_FPSTimer = 0.0f;
+            m_Logger->Info("FPS: %d", m_FPS);
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    m_Logger->Info("Main loop exited");
+    return 0;
+}
+
+void Engine::Shutdown() {
+    if (!m_Initialized) return;
+
+    m_Logger->Info("Shutting down...");
+    m_Application->Shutdown();
+    m_Initialized = false;
+}
+
+void Engine::UpdateTiming() {
+    m_Timer->Tick();
+    m_DeltaTime = m_Timer->GetDeltaTime();
+    m_TotalTime = m_Timer->GetTotalTime();
+}
+
+void Engine::ProcessEvents() {
+    m_Application->ProcessEvents();
+}
+
+void Engine::Update(float deltaTime) {
+    m_Application->Update(deltaTime);
+}
+
+void Engine::Render() {
+    m_Application->Render();
+}
+
+} // namespace Cosmos
+CPP2_EOF
+
+          cat > Engine/Core/include/Cosmos/Core/Timer.h <<'T_EOF'
+#pragma once
+
+#include <chrono>
+
+namespace Cosmos {
+
+class Timer {
+public:
+    Timer();
+    void Start();
+    void Tick();
+    float GetDeltaTime() const { return m_DeltaTime; }
+    float GetTotalTime() const { return m_TotalTime; }
+
+private:
+    std::chrono::high_resolution_clock::time_point m_Last;
+    float m_DeltaTime{0.0f};
+    float m_TotalTime{0.0f};
+};
+
+} // namespace Cosmos
+T_EOF
+
+          cat > Engine/Core/src/Timer.cpp <<'T2_EOF'
+#include "Cosmos/Core/Timer.h"
+
+using namespace Cosmos;
+
+Timer::Timer() {}
+
+void Timer::Start() {
+    m_Last = std::chrono::high_resolution_clock::now();
+    m_DeltaTime = 0.0f;
+    m_TotalTime = 0.0f;
+}
+
+void Timer::Tick() {
+    auto now = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float> diff = now - m_Last;
+    m_DeltaTime = diff.count();
+    m_TotalTime += m_DeltaTime;
+    m_Last = now;
+}
+T2_EOF
+
+          cat > Engine/Core/include/Cosmos/Core/Application.h <<'A_EOF'
+#pragma once
+
+namespace Cosmos {
+
+class Application {
+public:
+    Application();
+    ~Application();
+
+    bool Initialize();
+    void ProcessEvents();
+    void Update(float deltaTime);
+    void Render();
+    void Shutdown();
+
+    bool ShouldClose() const { return m_ShouldClose; }
+
+private:
+    float m_RunSeconds{3.0f};
+    float m_Accum{0.0f};
+    bool m_ShouldClose{false};
+};
+
+} // namespace Cosmos
+A_EOF
+
+          cat > Engine/Core/src/Application.cpp <<'A2_EOF'
+#include "Cosmos/Core/Application.h"
+#include <iostream>
+
+using namespace Cosmos;
+
+Application::Application() {}
+Application::~Application() {}
+
+bool Application::Initialize() {
+    std::cout << "Application initialized (will run ~3s)\n";
+    m_Accum = 0.0f;
+    m_ShouldClose = false;
+    return true;
+}
+
+void Application::ProcessEvents() {
+}
+
+void Application::Update(float deltaTime) {
+    m_Accum += deltaTime;
+    if (m_Accum >= m_RunSeconds) m_ShouldClose = true;
+}
+
+void Application::Render() {
+}
+
+void Application::Shutdown() {
+    std::cout << "Application shutdown\n";
+}
+A2_EOF
+
+          cat > Engine/Logging/include/Cosmos/Logging/Logger.h <<'L_H'
+#pragma once
+
+#include <string>
+#include <fstream>
+#include <mutex>
+
+namespace Cosmos {
+namespace Logging {
+
+class Logger {
+public:
+    Logger();
+    ~Logger();
+
+    void Info(const std::string& msg);
+    void Info(const char* fmt, int value);
+    void Error(const std::string& msg);
+    void Debug(const std::string& msg);
+
+private:
+    std::ofstream m_File;
+    std::mutex m_Mutex;
+};
+
+} // namespace Logging
+} // namespace Cosmos
+L_H
+
+          cat > Engine/Logging/src/Logger.cpp <<'L_CPP'
+#include "Cosmos/Logging/Logger.h"
+#include <iostream>
+#include <filesystem>
+#include <ctime>
+
+using namespace Cosmos::Logging;
+
+static std::string Timestamp() {
+    std::time_t t = std::time(nullptr);
+    char buf[64];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+    return std::string(buf);
+}
+
+Logger::Logger() {
+    try {
+        std::filesystem::create_directories("logs");
+        m_File.open("logs/engine.log", std::ios::app);
+    } catch(...) {}
+}
+
+Logger::~Logger() {
+    if (m_File.is_open()) m_File.close();
+}
+
+void Logger::Info(const std::string& msg) {
+    std::lock_guard<std::mutex> lk(m_Mutex);
+    std::string line = Timestamp() + " [INFO] " + msg;
+    std::cout << line << std::endl;
+    if (m_File.is_open()) m_File << line << std::endl;
+}
+
+void Logger::Info(const char* fmt, int value) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), fmt, value);
+    Info(std::string(buf));
+}
+
+void Logger::Error(const std::string& msg) {
+    std::lock_guard<std::mutex> lk(m_Mutex);
+    std::string line = Timestamp() + " [ERROR] " + msg;
+    std::cerr << line << std::endl;
+    if (m_File.is_open()) m_File << line << std::endl;
+}
+
+void Logger::Debug(const std::string& msg) {
+    std::lock_guard<std::mutex> lk(m_Mutex);
+    std::string line = Timestamp() + " [DEBUG] " + msg;
+    std::cout << line << std::endl;
+    if (m_File.is_open()) m_File << line << std::endl;
+}
+L_CPP
+
+          cat > Engine/Config/include/Cosmos/Config/ConfigManager.h <<'C_H'
+#pragma once
+
+#include <string>
+
+namespace Cosmos {
+namespace Config {
+
+class ConfigManager {
+public:
+    ConfigManager();
+    ~ConfigManager();
+
+    bool Initialize(const std::string& path);
+    void Shutdown();
+
+private:
+    std::string m_Path;
+};
+
+} // namespace Config
+} // namespace Cosmos
+C_H
+
+          cat > Engine/Config/src/ConfigManager.cpp <<'C_CPP'
+#include "Cosmos/Config/ConfigManager.h"
+#include <fstream>
+#include <iostream>
+
+using namespace Cosmos::Config;
+
+ConfigManager::ConfigManager() {}
+ConfigManager::~ConfigManager() {}
+
+bool ConfigManager::Initialize(const std::string& path) {
+    m_Path = path;
+    std::ifstream f(path);
+    if (!f.good()) {
+        std::cout << "Config file not found: " << path << " (using defaults)\n";
+        return false;
+    }
+    std::cout << "Loaded config: " << path << "\n";
+    return true;
+}
+
+void ConfigManager::Shutdown() {
+}
+C_CPP
+
+          cat > README.md <<'R_EOF'
+# SpaceEngine-2.0 (minimal)
+
+This repository is an initial minimal skeleton for the Cosmos / SpaceEngine-2.0 project.
+
+What you get in this branch (feature/phase0-init):
+- Minimal Engine core (Engine, Timer, Application)
+- Simple Logger that writes to stdout and logs/engine.log
+- ConfigManager stub
+- CMake build and a small console executable that runs ~3 seconds
+- GitHub Actions workflow to build and run the binary on ubuntu-latest
+
+How to build locally
+
+```bash
+git clone https://github.com/GLS-dotcom/SpaceEngine-2.0.git
+cd SpaceEngine-2.0
+git checkout feature/phase0-init
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release --parallel
+./bin/CosmosEngine
